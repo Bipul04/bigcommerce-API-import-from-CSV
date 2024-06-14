@@ -18,14 +18,19 @@ app.get('/process-csv', (req, res) => {
         .on('data', (row) => {
             const categoryName = row['WSM_CATNAME'];
             const longDesc = row['LONG_DESC'];
+            const metaDesc = row['METADESCRIPTION'];
+            const MetaTitle = row['META TITLE'];
+            const MetaKeywordsString = row['KEYWORDS'];
             const extendedDesc = row['EXTENDED DESCRIPTION'];
 
             let description = longDesc;
             // if (extendedDesc) {
             //     description += `<br>${extendedDesc}`;
             // }
+            let MetaKeywords = MetaKeywordsString.split(", ").map(item => item.trim());
 
-            results.push({ categoryName, description });
+
+            results.push({ categoryName, description, metaDesc, MetaTitle, MetaKeywords });
         })
         .on('end', () => {
             // Save results to a JSON file
@@ -68,8 +73,14 @@ const getCategoryId = async (categoryName, description) => {
         const response = await fetch(`https://api.bigcommerce.com/stores/bohausxa6o/v3/catalog/trees/categories?name=${encodeURIComponent(categoryName)}`, requestOptions);
         const result = await response.json();
         if (result.data && result.data.length > 0) {
-            const categoryId = result.data[0].category_id; // Assuming you need the first matching category's ID
-            return { categoryId, categoryName, description, responseDesc: result.data[0].description || "" };
+            const categoryId = result.data[0].category_id;
+            const meta_description = result.data[0].meta_description;
+            const meta_keywords = result.data[0].meta_keywords;
+            const page_title = result.data[0].page_title;
+            return {
+                categoryId, categoryName, description, responseDesc: result.data[0].description || "", metaDesc, MetaKeywords,
+                MetaTitle
+            };
         } else {
             return { categoryId: null, categoryName, description, error: "No response data" };
         }
@@ -110,7 +121,8 @@ app.get('/process-categories', async (req, res) => {
                 emptyDescResults.push({
                     categoryId: result.categoryId,
                     categoryName: result.categoryName,
-                    description: result.description
+                    description: result.description,
+                    page_title: page_title,
                 });
             }
         });
@@ -128,6 +140,29 @@ app.get('/process-categories', async (req, res) => {
     }
 });
 
+// Endpoint to read the JSON file and process its content
+app.get('/process-empty-desc', async (req, res) => {
+    try {
+        const data = JSON.parse(fs.readFileSync(emptyDescFilePath, 'utf8'));
+        const promises = data.map(item => getCategoryId(item.categoryName, item.description));
+        const results = await Promise.all(promises);
+
+         // Separate results
+         const emptyDescResults = [];
+
+        results.forEach(result => {
+            console.log("result", result)
+        });
+
+
+
+        res.send('Categories processed and saved to respective files.');
+    } catch (error) {
+        console.error('Error processing categories:', error);
+        res.status(500).send('An error occurred while processing categories.');
+    }
+});
+
 
 
 // Update the categories opf empty desc categories
@@ -137,6 +172,43 @@ const emptyDescCategoriesFilePath = path.join(__dirname, 'empty_desc_categories.
 
 // Function to make the PUT request to update category description
 const updateCategoryDescription = async (category) => {
+    if (!category.description) {
+        console.log(`Category ${category.categoryName} has empty description. Skipping...`);
+        return { categoryId: category.categoryId, categoryName: category.categoryName, description: category.description };
+    }
+    const { Headers, default: fetch } = await import('node-fetch');
+
+    const myHeaders = new Headers();
+    myHeaders.append("X-Auth-Token", "90iph80fw7sgemjijz54frmydqql2gb");
+    myHeaders.append("Content-Type", "application/json");
+    myHeaders.append("Accept", "application/json");
+
+    const body = JSON.stringify([
+        {
+            category_id: category.categoryId,
+            description: category.description
+        }
+    ]);
+
+    const requestOptions = {
+        method: "PUT",
+        headers: myHeaders,
+        body: body,
+        redirect: "follow"
+    };
+
+    try {
+        const response = await fetch("https://api.bigcommerce.com/stores/bohausxa6o/v3/catalog/trees/categories", requestOptions);
+        const result = await response.json();
+        return { categoryId: category.categoryId, categoryName: category.categoryName, response: result };
+    } catch (error) {
+        console.error(`Error updating category ${category.categoryName}:`, error);
+        return { categoryId: category.categoryId, categoryName: category.categoryName, error: error.message };
+    }
+};
+
+// Function to make the PUT request to update category description
+const updateCategoryMeta = async (category) => {
     if (!category.description) {
         console.log(`Category ${category.categoryName} has empty description. Skipping...`);
         return { categoryId: category.categoryId, categoryName: category.categoryName, description: category.description };
